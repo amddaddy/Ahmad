@@ -1,0 +1,7 @@
+{
+  "name": "Ahmad English-Hausa Translator",
+  "description": "An English chatbot named Ahmad that helps with English vocabulary and translates words/sentences to Hausa, providing simple examples. The chatbot replies in a friendly and helpful tone.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
