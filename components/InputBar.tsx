@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import SendIcon from './icons/SendIcon';
 import MicrophoneIcon from './icons/MicrophoneIcon';
@@ -57,11 +56,13 @@ declare global {
 interface InputBarProps {
     onSendMessage: (message: string) => void;
     isLoading: boolean;
+    onStartRecording: () => void;
 }
 
-const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading }) => {
+const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading, onStartRecording }) => {
     const [input, setInput] = useState('');
     const [isRecording, setIsRecording] = useState(false);
+    const [micError, setMicError] = useState<string | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const recognitionRef = useRef<SpeechRecognition | null>(null);
 
@@ -75,10 +76,18 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading }) => {
             recognition.interimResults = true;
             recognition.lang = 'en-US';
 
-            recognition.onstart = () => setIsRecording(true);
+            recognition.onstart = () => {
+                setIsRecording(true);
+                setMicError(null);
+            };
             recognition.onend = () => setIsRecording(false);
             recognition.onerror = (event) => {
                 console.error("Speech recognition error:", event.error);
+                if (event.error === 'not-allowed') {
+                    setMicError("Microphone access denied. Please allow it in your browser settings.");
+                } else {
+                     setMicError(`Speech recognition error: ${event.error}`);
+                }
                 setIsRecording(false);
             };
 
@@ -93,6 +102,7 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading }) => {
             recognitionRef.current = recognition;
         } else {
             console.warn("Speech Recognition not supported in this browser.");
+            setMicError("Speech recognition is not supported by your browser.");
         }
 
         return () => {
@@ -106,17 +116,28 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading }) => {
         if (input.trim() && !isLoading) {
             onSendMessage(input);
             setInput('');
+            if (isRecording) {
+                recognitionRef.current?.stop();
+            }
         }
     };
 
     const handleMicClick = () => {
         if (isLoading || !recognitionRef.current) return;
         
+        setMicError(null);
+
         if (isRecording) {
             recognitionRef.current.stop();
         } else {
+            onStartRecording();
             inputRef.current?.focus();
-            recognitionRef.current.start();
+            try {
+                recognitionRef.current.start();
+            } catch (err) {
+                 console.error("Error starting speech recognition:", err);
+                 setMicError("Could not start microphone. Please try again.");
+            }
         }
     };
 
@@ -147,7 +168,7 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading }) => {
                      <button
                         type="button"
                         onClick={handleMicClick}
-                        disabled={isLoading}
+                        disabled={isLoading || !recognitionRef.current}
                         aria-label={isRecording ? "Stop recording" : "Start recording"}
                         className={`w-12 h-12 flex items-center justify-center rounded-full text-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-rose-500 disabled:opacity-50 disabled:cursor-not-allowed ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-gradient-to-br from-pink-500 to-rose-500'}`}
                     >
@@ -155,6 +176,9 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading }) => {
                     </button>
                 )}
             </form>
+            {micError && (
+                <p className="text-red-500 text-sm mt-2 text-center">{micError}</p>
+            )}
         </footer>
     );
 };
