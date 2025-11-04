@@ -1,5 +1,4 @@
 
-
 import React, { useState } from 'react';
 import { Message } from '../types';
 import CopyIcon from './icons/CopyIcon';
@@ -13,10 +12,11 @@ interface ChatBubbleProps {
     message: Message;
     isSpeaking: boolean;
     isAudioLoading: boolean;
+    isStreaming: boolean;
     onToggleSpeech: (message: Message) => void;
 }
 
-const ChatBubble: React.FC<ChatBubbleProps> = ({ message, isSpeaking, isAudioLoading, onToggleSpeech }) => {
+const ChatBubble: React.FC<ChatBubbleProps> = ({ message, isSpeaking, isAudioLoading, isStreaming, onToggleSpeech }) => {
     const [isCopied, setIsCopied] = useState(false);
     
     const isUser = message.sender === 'user';
@@ -32,21 +32,18 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({ message, isSpeaking, isAudioLoa
             setIsCopied(true);
             setTimeout(() => {
                 setIsCopied(false);
-            }, 2000); // Revert icon after 2 seconds
+            }, 2000);
         }).catch(err => {
             console.error('Failed to copy text:', err);
         });
     };
 
-    // A simple markdown renderer that handles headings, bold, and code.
     const renderText = (text: string) => {
         return text.split('\n').map((line, index) => {
-            // Handle H2 Headings
             if (line.startsWith('## ')) {
                 return <h2 key={index} className="text-xl font-bold mt-2 mb-1 text-pink-500 dark:text-pink-400">{line.substring(3)}</h2>;
             }
             
-            // Process inline markdown like bold and code for other lines
             const parts = line.split(/(\*\*.*?\*\*|`.*?`)/g);
             return (
                 <div key={index}>
@@ -65,7 +62,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({ message, isSpeaking, isAudioLoa
     };
 
     const toolbarClasses = `absolute bottom-2 right-2 flex items-center space-x-1 bg-white dark:bg-gray-800 bg-opacity-80 dark:bg-opacity-80 rounded-full transition-opacity duration-200 ${
-        isAudioLoading ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+        isAudioLoading || isStreaming ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
     }`;
 
     return (
@@ -78,8 +75,9 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({ message, isSpeaking, isAudioLoa
             <div className={`relative p-4 rounded-lg max-w-lg shadow-md ${bubbleClasses}`}>
                 <div className="prose prose-sm dark:prose-invert max-w-none">
                   {renderText(message.text)}
+                  {isStreaming && <span className="inline-block w-2 h-5 bg-pink-500 dark:bg-pink-400 animate-pulse ml-1"></span>}
                 </div>
-                 {!isUser && (
+                 {!isUser && !isStreaming && message.text && (
                     <div className={toolbarClasses}>
                          <button
                             onClick={() => onToggleSpeech(message)}

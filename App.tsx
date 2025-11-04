@@ -1,11 +1,13 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Message, VocabularyCategory } from './types';
-import { translateToHausa, textToSpeech } from './services/geminiService';
+// FIX: Import 'textToSpeech' to make it available in the component.
+import { streamTranslateToHausa, textToSpeech } from './services/geminiService';
 import Header from './components/Header';
 import ChatBubble from './components/ChatBubble';
 import InputBar from './components/InputBar';
 import AboutModal from './components/AboutModal';
+import Toast from './components/Toast';
 
 // Decodes a base64 string into a Uint8Array.
 function decode(base64: string) {
@@ -54,7 +56,6 @@ const App: React.FC = () => {
             const savedMessages = localStorage.getItem(LOCAL_STORAGE_KEY);
             if (savedMessages) {
                 const parsedMessages = JSON.parse(savedMessages) as Message[];
-                // Ensure isSynced flag exists on older messages for compatibility
                 return parsedMessages.map(msg => 
                     msg.sender === 'user' ? { ...msg, isSynced: msg.isSynced ?? true } : msg
                 );
@@ -67,6 +68,7 @@ const App: React.FC = () => {
     });
 
     const [isLoading, setIsLoading] = useState(false);
+    const [isBotStreaming, setIsBotStreaming] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [speakingMessageId, setSpeakingMessageId] = useState<number | null>(null);
     const [audioLoadingMessageId, setAudioLoadingMessageId] = useState<number | null>(null);
@@ -112,11 +114,11 @@ const App: React.FC = () => {
 
     useEffect(() => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages, isLoading]);
+    }, [messages, isLoading, isBotStreaming]);
 
     const stopPlayback = useCallback(() => {
         if (audioSourceRef.current) {
-            audioSourceRef.current.onended = null; // Prevent onended from firing on manual stop
+            audioSourceRef.current.onended = null;
             try {
                 audioSourceRef.current.stop();
             } catch (e) {
@@ -141,8 +143,7 @@ const App: React.FC = () => {
         try {
             setAudioLoadingMessageId(messageId);
             const base64Audio = await textToSpeech(text);
-
-            setAudioLoadingMessageId(null); // Done loading, success or fail.
+            setAudioLoadingMessageId(null);
 
             if (base64Audio && audioContextRef.current) {
                 const audioData = decode(base64Audio);
@@ -153,7 +154,6 @@ const App: React.FC = () => {
                 source.connect(audioContextRef.current.destination);
                 
                 source.onended = () => {
-                    // When playback finishes naturally, just clear the state.
                     if (audioSourceRef.current === source) {
                        setSpeakingMessageId(null);
                        audioSourceRef.current = null;
@@ -162,20 +162,21 @@ const App: React.FC = () => {
                 
                 source.start();
                 audioSourceRef.current = source;
-                setSpeakingMessageId(messageId); // Now we are speaking
+                setSpeakingMessageId(messageId);
             } else {
-                 setSpeakingMessageId(null); // Ensure not speaking if audio failed
+                 setSpeakingMessageId(null);
             }
         } catch (e) {
             console.error("Failed to play audio:", e);
+            const errorMessage = e instanceof Error ? e.message : "An unknown error occurred.";
+            setError(`Sorry, I couldn't read that message aloud. ${errorMessage}`);
             setAudioLoadingMessageId(null);
-            stopPlayback(); // this will also clear speakingMessageId
+            stopPlayback();
         }
     }, [stopPlayback]);
 
     const addTaughtWord = useCallback((word: string) => {
         setTaughtWords(prevWords => {
-            // Prevent duplicates
             const lowerCaseWord = word.toLowerCase();
             if (prevWords.some(w => w.toLowerCase() === lowerCaseWord)) {
                 return prevWords;
@@ -192,47 +193,59 @@ const App: React.FC = () => {
 
     const getBotResponse = useCallback(async (userMessage: Message) => {
         setError(null);
-        try {
-            let botResponseText = await translateToHausa(userMessage.text, category, taughtWords);
+        
+        const botMessageId = Date.now() + 1;
+        const newBotMessage: Message = { id: botMessageId, sender: 'bot', text: '' };
 
-            const wordMatch = botResponseText.match(/<WORD>(.*?)<\/WORD>/);
+        setMessages(prev => {
+            const updatedWithSync = prev.map(msg => 
+                msg.id === userMessage.id ? { ...msg, isSynced: true } : msg
+            );
+            return [...updatedWithSync, newBotMessage];
+        });
+
+        setIsBotStreaming(true);
+
+        try {
+            const stream = await streamTranslateToHausa(userMessage.text, category, taughtWords);
+            let fullResponse = "";
+            for await (const chunk of stream) {
+                fullResponse += chunk;
+                setMessages(prev => prev.map(msg => 
+                    msg.id === botMessageId ? { ...msg, text: fullResponse } : msg
+                ));
+            }
+
+            const wordMatch = fullResponse.match(/<WORD>(.*?)<\/WORD>/);
             if (wordMatch && wordMatch[1]) {
                 const newWord = wordMatch[1].trim();
                 if (newWord) {
                     addTaughtWord(newWord);
                 }
-                botResponseText = botResponseText.replace(/<WORD>.*?<\/WORD>\s*/, '');
+                const cleanedResponse = fullResponse.replace(/<WORD>.*?<\/WORD>\s*/, '');
+                 setMessages(prev => prev.map(msg => 
+                    msg.id === botMessageId ? { ...msg, text: cleanedResponse } : msg
+                ));
+                playAudio(cleanedResponse, botMessageId);
+            } else {
+                playAudio(fullResponse, botMessageId);
             }
 
-            const newBotMessage: Message = {
-                id: Date.now() + 1,
-                sender: 'bot',
-                text: botResponseText,
-            };
-            
-            setMessages(prev => {
-                const updatedWithSync = prev.map(msg => 
-                    msg.id === userMessage.id ? { ...msg, isSynced: true } : msg
-                );
-                return [...updatedWithSync, newBotMessage];
-            });
-
-            playAudio(botResponseText, newBotMessage.id);
         } catch (err) {
             const errorMessage = "It seems there was an issue connecting. Please try again in a moment.";
             setError(errorMessage);
-            // Don't add an error message to chat, let the user message remain unsynced for retry.
             console.error(err);
-             // We need to update the state to mark the message as NOT synced
-            setMessages(prev => prev.map(msg => 
-                msg.id === userMessage.id ? { ...msg, isSynced: false } : msg
-            ));
+             setMessages(prev => prev.filter(msg => msg.id !== botMessageId));
+            throw err;
+        } finally {
+            setIsBotStreaming(false);
         }
     }, [category, playAudio, taughtWords, addTaughtWord]);
 
     const handleSendMessage = useCallback((userInput: string) => {
         if (!userInput.trim()) return;
         stopPlayback();
+        setError(null);
 
         const newUserMessage: Message = {
             id: Date.now(),
@@ -244,44 +257,42 @@ const App: React.FC = () => {
         setMessages(prev => [...prev, newUserMessage]);
     }, [stopPlayback]);
 
-    // This effect manages the message queue, ensuring only one message is sent at a time.
     useEffect(() => {
         const processMessageQueue = async () => {
-            if (isSyncing.current || !navigator.onLine) {
+            if (isSyncing.current || !navigator.onLine || error) {
                 return;
             }
 
             const messageToSync = messages.find(msg => msg.sender === 'user' && !msg.isSynced);
 
             if (!messageToSync) {
-                setIsLoading(false); // No items left to sync, ensure loading is off.
+                setIsLoading(false);
                 return;
             }
 
             isSyncing.current = true;
             setIsLoading(true);
 
-            await getBotResponse(messageToSync);
-
-            isSyncing.current = false;
-            
-            // The state change in getBotResponse will trigger this useEffect again,
-            // which will call this function again, creating a natural loop that
-            // processes any other messages that were added while the last one was syncing.
+            try {
+                await getBotResponse(messageToSync);
+            } catch (e) {
+                // Error is set in getBotResponse.
+            } finally {
+                setIsLoading(false);
+                isSyncing.current = false;
+            }
         };
 
         processMessageQueue();
 
-        window.addEventListener('online', processMessageQueue);
-        return () => {
-            window.removeEventListener('online', processMessageQueue);
-        };
-    }, [messages, getBotResponse]);
+        const handleOnline = () => setError(null);
+        window.addEventListener('online', handleOnline);
+        return () => window.removeEventListener('online', handleOnline);
+    }, [messages, getBotResponse, error]);
 
     const handleCategoryChange = useCallback((newCategory: VocabularyCategory) => {
         if (newCategory === category) return;
         setCategory(newCategory);
-        
         stopPlayback();
 
         const botMessage: Message = {
@@ -300,6 +311,14 @@ const App: React.FC = () => {
         }
     }, [speakingMessageId, audioLoadingMessageId, playAudio, stopPlayback]);
     
+    const handleClearChat = useCallback(() => {
+        stopPlayback();
+        setMessages([INITIAL_MESSAGE]);
+        setTaughtWords([]);
+        localStorage.removeItem(LOCAL_STORAGE_KEY);
+        localStorage.removeItem(TAUGHT_WORDS_KEY);
+    }, [stopPlayback]);
+
     const handleOpenAboutModal = useCallback(() => setIsAboutModalOpen(true), []);
     const handleCloseAboutModal = useCallback(() => setIsAboutModalOpen(false), []);
 
@@ -309,18 +328,20 @@ const App: React.FC = () => {
                 selectedCategory={category} 
                 onSelectCategory={handleCategoryChange} 
                 onOpenAbout={handleOpenAboutModal}
+                onClearChat={handleClearChat}
             />
             <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
-                {messages.map((msg) => (
+                {messages.map((msg, index) => (
                     <ChatBubble 
                         key={msg.id} 
                         message={msg} 
                         isSpeaking={speakingMessageId === msg.id}
                         isAudioLoading={audioLoadingMessageId === msg.id}
                         onToggleSpeech={handleToggleSpeech}
+                        isStreaming={isBotStreaming && index === messages.length - 1}
                     />
                 ))}
-                {isLoading && (
+                {isLoading && !isBotStreaming && (
                      <div className="flex justify-start">
                         <div className="bg-white dark:bg-gray-800 rounded-lg rounded-bl-none p-4 max-w-lg shadow-md animate-pulse">
                            <div className="flex items-center space-x-2">
@@ -333,7 +354,10 @@ const App: React.FC = () => {
                 )}
                 <div ref={chatEndRef} />
             </main>
-            <InputBar onSendMessage={handleSendMessage} isLoading={isLoading} onStartRecording={stopPlayback} />
+            
+            <Toast message={error} onClose={() => setError(null)} />
+
+            <InputBar onSendMessage={handleSendMessage} isLoading={isLoading || isBotStreaming} onStartRecording={stopPlayback} />
             <AboutModal isOpen={isAboutModalOpen} onClose={handleCloseAboutModal} />
         </div>
     );

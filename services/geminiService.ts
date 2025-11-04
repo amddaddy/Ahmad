@@ -38,9 +38,10 @@ When your dear user asks about a specific English word or short phrase (for defi
 -   Get straight to the point, but with warmth. Avoid generic filler phrases like "Of course!" or "Here is...".
 -   **Brevity is kindness:** Please keep your explanations concise. Shorter responses allow the voice to be generated more quickly, creating a smoother experience for your dear user.`;
 
-export const translateToHausa = async (prompt: string, category: VocabularyCategory, taughtWords: string[]): Promise<string> => {
+
+export async function* streamTranslateToHausa(prompt: string, category: VocabularyCategory, taughtWords: string[]): AsyncGenerator<string> {
   try {
-    const response = await ai.models.generateContent({
+    const response = await ai.models.generateContentStream({
         model: "gemini-2.5-flash",
         contents: prompt,
         config: {
@@ -49,17 +50,24 @@ export const translateToHausa = async (prompt: string, category: VocabularyCateg
         }
     });
 
-    return response.text;
+    for await (const chunk of response) {
+        yield chunk.text;
+    }
+
   } catch (error) {
     console.error("Error calling Gemini API:", error);
     throw new Error("Failed to get response from AI. Please check your connection and API key.");
   }
-};
+}
 
 export const textToSpeech = async (text: string): Promise<string | null> => {
     try {
-        // Strip markdown headings before sending to TTS for more natural speech
-        const cleanText = text.replace(/^##\s/gm, '');
+        const cleanText = text.replace(/(\*\*|##\s)/g, '').replace(/\[.*?\]/g, '').trim();
+
+        if (!cleanText) {
+            return null;
+        }
+        
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash-preview-tts",
             contents: [{ parts: [{ text: cleanText }] }],
@@ -79,6 +87,6 @@ export const textToSpeech = async (text: string): Promise<string | null> => {
         return base64Audio;
     } catch (error) {
         console.error("Error calling Gemini TTS API:", error);
-        return null;
+        throw new Error("Could not generate audio. Please try again in a moment.");
     }
 };

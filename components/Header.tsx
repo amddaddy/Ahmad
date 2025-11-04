@@ -1,6 +1,8 @@
+
 import React from 'react';
 import { VocabularyCategory } from '../types';
 import InfoIcon from './icons/InfoIcon';
+import TrashIcon from './icons/TrashIcon';
 
 const categories: VocabularyCategory[] = ['General', 'Food & Dining', 'Travel', 'Technology', 'At Home'];
 
@@ -8,10 +10,11 @@ interface HeaderProps {
     selectedCategory: VocabularyCategory;
     onSelectCategory: (category: VocabularyCategory) => void;
     onOpenAbout: () => void;
+    onClearChat: () => void;
 }
 
 
-const Header: React.FC<HeaderProps> = ({ selectedCategory, onSelectCategory, onOpenAbout }) => {
+const Header: React.FC<HeaderProps> = ({ selectedCategory, onSelectCategory, onOpenAbout, onClearChat }) => {
     return (
         <header className="bg-white dark:bg-gray-800 shadow-md p-4 sticky top-0 z-10">
             <div className="flex items-center justify-between">
@@ -24,14 +27,24 @@ const Header: React.FC<HeaderProps> = ({ selectedCategory, onSelectCategory, onO
                         <p className="text-sm text-gray-500 dark:text-gray-400">Your vocabulary & translation guide</p>
                     </div>
                 </div>
-                 <button 
-                    onClick={onOpenAbout} 
-                    aria-label="About Ahmad" 
-                    title="About Ahmad"
-                    className="p-2 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-pink-400 dark:focus:ring-offset-gray-800"
-                >
-                    <InfoIcon />
-                </button>
+                 <div className="flex items-center space-x-2">
+                    <button 
+                        onClick={onClearChat} 
+                        aria-label="Clear conversation" 
+                        title="Clear conversation"
+                        className="p-2 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-pink-400 dark:focus:ring-offset-gray-800"
+                    >
+                        <TrashIcon />
+                    </button>
+                    <button 
+                        onClick={onOpenAbout} 
+                        aria-label="About Ahmad" 
+                        title="About Ahmad"
+                        className="p-2 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-pink-400 dark:focus:ring-offset-gray-800"
+                    >
+                        <InfoIcon />
+                    </button>
+                </div>
             </div>
             <div className="mt-4 flex flex-wrap gap-2 items-center justify-start">
                 <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mr-2">Category:</p>
