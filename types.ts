@@ -7,3 +7,8 @@ export interface Message {
 }
 
 export type VocabularyCategory = 'General' | 'Food & Dining' | 'Travel' | 'Technology' | 'At Home';
+
+export interface TaughtWord {
+  english: string;
+  hausa: string;
+}

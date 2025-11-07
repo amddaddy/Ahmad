@@ -1,10 +1,10 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import SendIcon from './icons/SendIcon';
 import MicrophoneIcon from './icons/MicrophoneIcon';
 
-// Fix for TypeScript not knowing about the Web Speech API (SpeechRecognition).
-// These interfaces provide the necessary type definitions to allow the compiler
-// to recognize SpeechRecognition and its associated events and properties.
+// These interfaces provide the necessary type definitions for the Web Speech API,
+// which may not be fully recognized by default in all TypeScript environments.
 interface SpeechRecognitionAlternative {
     transcript: string;
     confidence: number;
@@ -30,6 +30,7 @@ interface SpeechRecognitionEvent extends Event {
 
 interface SpeechRecognitionErrorEvent extends Event {
     error: string;
+    message: string;
 }
 
 interface SpeechRecognition extends EventTarget {
@@ -57,9 +58,10 @@ interface InputBarProps {
     onSendMessage: (message: string) => void;
     isLoading: boolean;
     onStartRecording: () => void;
+    isQuizMode: boolean;
 }
 
-const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading, onStartRecording }) => {
+const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading, onStartRecording, isQuizMode }) => {
     const [input, setInput] = useState('');
     const [isRecording, setIsRecording] = useState(false);
     const [micError, setMicError] = useState<string | null>(null);
@@ -67,8 +69,12 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading, onStartRe
     const recognitionRef = useRef<SpeechRecognition | null>(null);
 
     useEffect(() => {
-        inputRef.current?.focus();
+        if (!isQuizMode) {
+            inputRef.current?.focus();
+        }
+    }, [isQuizMode]);
 
+    useEffect(() => {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (SpeechRecognition) {
             const recognition = new SpeechRecognition();
@@ -123,7 +129,7 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading, onStartRe
     };
 
     const handleMicClick = () => {
-        if (isLoading || !recognitionRef.current) return;
+        if (isLoading || !recognitionRef.current || isQuizMode) return;
         
         setMicError(null);
 
@@ -141,7 +147,8 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading, onStartRe
         }
     };
 
-    const placeholderText = isRecording ? "Listening..." : "Type or say something...";
+    const placeholderText = isQuizMode ? "Type your answer... (or 'stop quiz')" : (isRecording ? "Listening..." : "Type or say something...");
+    const micDisabled = isLoading || !recognitionRef.current || isQuizMode;
 
     return (
         <footer className="bg-white dark:bg-gray-800 p-4 shadow-t-md sticky bottom-0">
@@ -153,7 +160,7 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading, onStartRe
                     onChange={(e) => setInput(e.target.value)}
                     placeholder={placeholderText}
                     className="flex-1 p-3 border border-gray-300 dark:border-gray-600 rounded-full focus:outline-none focus:ring-2 focus:ring-pink-400 dark:bg-gray-700 dark:text-white transition duration-200"
-                    disabled={isLoading || isRecording}
+                    disabled={isLoading && !isQuizMode}
                 />
                 {input.trim() ? (
                     <button
@@ -168,9 +175,9 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading, onStartRe
                      <button
                         type="button"
                         onClick={handleMicClick}
-                        disabled={isLoading || !recognitionRef.current}
+                        disabled={micDisabled}
                         aria-label={isRecording ? "Stop recording" : "Start recording"}
-                        className={`w-12 h-12 flex items-center justify-center rounded-full text-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-rose-500 disabled:opacity-50 disabled:cursor-not-allowed ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-gradient-to-br from-pink-500 to-rose-500'}`}
+                        className={`w-12 h-12 flex items-center justify-center rounded-full text-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-rose-500 disabled:opacity-50 disabled:cursor-not-allowed ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-gradient-to-br from-pink-500 to-rose-500'} ${isQuizMode ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                         <MicrophoneIcon />
                     </button>

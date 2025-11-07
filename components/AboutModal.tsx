@@ -1,12 +1,15 @@
+
 import React from 'react';
 import CloseIcon from './icons/CloseIcon';
+import { TaughtWord } from '../types';
 
 interface AboutModalProps {
     isOpen: boolean;
     onClose: () => void;
+    taughtWords: TaughtWord[];
 }
 
-const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
+const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, taughtWords }) => {
     if (!isOpen) return null;
 
     return (
@@ -51,6 +54,24 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
                             <li><strong>Translate:</strong> Whether it's a single word or a long sentence, I can translate between English and Hausa for you.</li>
                             <li><strong>Read Aloud:</strong> You can click the speaker icon on my messages to hear them spoken, helping you with pronunciation and listening skills.</li>
                         </ul>
+                        
+                        <h3 className="font-semibold text-lg text-gray-800 dark:text-gray-100 pt-2">Your Vocabulary</h3>
+                        {taughtWords.length > 0 ? (
+                            <div className="max-h-48 overflow-y-auto bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-200 dark:border-gray-700 not-prose">
+                                <ul className="space-y-2 list-none p-0 m-0">
+                                    {taughtWords.map((word, index) => (
+                                        <li key={index} className="flex justify-between items-center text-sm p-0 m-0">
+                                            <span className="font-medium text-gray-800 dark:text-gray-200">{word.english}</span>
+                                            <span className="text-gray-500 dark:text-gray-400 text-right">{word.hausa}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        ) : (
+                            <p className="italic text-gray-500 dark:text-gray-400">
+                                You haven't learned any new words yet. Ask me to "teach you a word" to start building your vocabulary list!
+                            </p>
+                        )}
 
                         <h3 className="font-semibold text-lg text-gray-800 dark:text-gray-100 pt-2">How It Works</h3>
                         <p>

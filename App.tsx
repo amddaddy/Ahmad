@@ -1,7 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Message, VocabularyCategory } from './types';
-// FIX: Import 'textToSpeech' to make it available in the component.
+import { Message, VocabularyCategory, TaughtWord } from './types';
 import { streamTranslateToHausa, textToSpeech } from './services/geminiService';
 import Header from './components/Header';
 import ChatBubble from './components/ChatBubble';
@@ -74,28 +73,56 @@ const App: React.FC = () => {
     const [audioLoadingMessageId, setAudioLoadingMessageId] = useState<number | null>(null);
     const [category, setCategory] = useState<VocabularyCategory>('General');
     const [isAboutModalOpen, setIsAboutModalOpen] = useState(false);
-    const [taughtWords, setTaughtWords] = useState<string[]>([]);
+    const [taughtWords, setTaughtWords] = useState<TaughtWord[]>([]);
+    
+    const [isQuizMode, setIsQuizMode] = useState(false);
+    const [currentQuizQuestion, setCurrentQuizQuestion] = useState<TaughtWord | null>(null);
+    const [quizScore, setQuizScore] = useState({ correct: 0, questions: 0 });
+    const [quizDirection, setQuizDirection] = useState<'en-ha' | 'ha-en'>('en-ha');
+
     const chatEndRef = useRef<HTMLDivElement>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
     const isSyncing = useRef(false);
+    const saveTimeoutRef = useRef<number | null>(null);
+    const streamUpdateTimerRef = useRef<number | null>(null);
+    const streamingTextRef = useRef('');
+    const streamingMessageIdRef = useRef<number | null>(null);
+    const taughtWordsRef = useRef(taughtWords);
+    const getBotResponseRef = useRef<((userMessage: Message) => Promise<void>) | null>(null);
 
-    // Persist messages to local storage whenever they change
+    // Debounce persisting messages to local storage to improve performance
     useEffect(() => {
-        try {
-            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(messages));
-        } catch (error) {
-            console.error("Could not save messages to local storage", error);
+        if (saveTimeoutRef.current) {
+            clearTimeout(saveTimeoutRef.current);
         }
+        saveTimeoutRef.current = window.setTimeout(() => {
+            try {
+                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(messages));
+            } catch (error) {
+                console.error("Could not save messages to local storage", error);
+            }
+        }, 500); // Debounce save by 500ms
+
+        return () => {
+            if (saveTimeoutRef.current) {
+                clearTimeout(saveTimeoutRef.current);
+            }
+        };
     }, [messages]);
+    
+    // Keep taughtWordsRef in sync with the state to avoid dependency cycles
+    useEffect(() => {
+        taughtWordsRef.current = taughtWords;
+    }, [taughtWords]);
 
     // Load taught words from local storage on initial load
     useEffect(() => {
         try {
             const saved = localStorage.getItem(TAUGHT_WORDS_KEY);
             if (saved) {
-                const words = JSON.parse(saved);
-                if (Array.isArray(words)) {
+                const words = JSON.parse(saved) as TaughtWord[];
+                if (Array.isArray(words) && words.every(w => typeof w === 'object' && w !== null && 'english' in w && 'hausa' in w)) {
                     setTaughtWords(words);
                 }
             }
@@ -129,6 +156,11 @@ const App: React.FC = () => {
         }
         setSpeakingMessageId(null);
         setAudioLoadingMessageId(null);
+    }, []);
+
+    const addBotMessage = useCallback((text: string) => {
+        const botMessage: Message = { id: Date.now(), sender: 'bot', text };
+        setMessages(prev => [...prev, botMessage]);
     }, []);
 
     const playAudio = useCallback(async (text: string, messageId: number) => {
@@ -175,10 +207,10 @@ const App: React.FC = () => {
         }
     }, [stopPlayback]);
 
-    const addTaughtWord = useCallback((word: string) => {
+    const addTaughtWord = useCallback((word: TaughtWord) => {
         setTaughtWords(prevWords => {
-            const lowerCaseWord = word.toLowerCase();
-            if (prevWords.some(w => w.toLowerCase() === lowerCaseWord)) {
+            const lowerCaseWord = word.english.toLowerCase();
+            if (prevWords.some(w => w.english.toLowerCase() === lowerCaseWord)) {
                 return prevWords;
             }
             const newWords = [...prevWords, word];
@@ -191,10 +223,27 @@ const App: React.FC = () => {
         });
     }, []);
 
+    const updateStreamingMessage = useCallback(() => {
+        if (!streamingMessageIdRef.current) return;
+
+        setMessages(prev => {
+            const lastMessage = prev[prev.length - 1];
+            if (lastMessage?.id === streamingMessageIdRef.current && lastMessage.text !== streamingTextRef.current) {
+                const allButLast = prev.slice(0, -1);
+                const updatedLastMessage = { ...lastMessage, text: streamingTextRef.current };
+                return [...allButLast, updatedLastMessage];
+            }
+            return prev;
+        });
+    }, []);
+
     const getBotResponse = useCallback(async (userMessage: Message) => {
         setError(null);
         
         const botMessageId = Date.now() + 1;
+        streamingMessageIdRef.current = botMessageId;
+        streamingTextRef.current = '';
+
         const newBotMessage: Message = { id: botMessageId, sender: 'bot', text: '' };
 
         setMessages(prev => {
@@ -206,26 +255,44 @@ const App: React.FC = () => {
 
         setIsBotStreaming(true);
 
-        try {
-            const stream = await streamTranslateToHausa(userMessage.text, category, taughtWords);
-            let fullResponse = "";
-            for await (const chunk of stream) {
-                fullResponse += chunk;
-                setMessages(prev => prev.map(msg => 
-                    msg.id === botMessageId ? { ...msg, text: fullResponse } : msg
-                ));
-            }
+        if (streamUpdateTimerRef.current) {
+            clearInterval(streamUpdateTimerRef.current);
+        }
+        streamUpdateTimerRef.current = window.setInterval(updateStreamingMessage, 100);
 
+        try {
+            const stream = await streamTranslateToHausa(userMessage.text, category, taughtWordsRef.current.map(w => w.english));
+            
+            for await (const chunk of stream) {
+                streamingTextRef.current += chunk;
+            }
+            
+            if (streamUpdateTimerRef.current) {
+                clearInterval(streamUpdateTimerRef.current);
+                streamUpdateTimerRef.current = null;
+            }
+            updateStreamingMessage();
+
+            const fullResponse = streamingTextRef.current;
             const wordMatch = fullResponse.match(/<WORD>(.*?)<\/WORD>/);
             if (wordMatch && wordMatch[1]) {
                 const newWord = wordMatch[1].trim();
-                if (newWord) {
-                    addTaughtWord(newWord);
+                const hausaMatch = fullResponse.match(/\*\*Hausa Translation:\*\*\s*([^\n]+)/);
+
+                if (newWord && hausaMatch && hausaMatch[1]) {
+                    const hausaTranslation = hausaMatch[1].trim();
+                    addTaughtWord({ english: newWord, hausa: hausaTranslation });
                 }
+
                 const cleanedResponse = fullResponse.replace(/<WORD>.*?<\/WORD>\s*/, '');
-                 setMessages(prev => prev.map(msg => 
-                    msg.id === botMessageId ? { ...msg, text: cleanedResponse } : msg
-                ));
+                setMessages(prev => {
+                    const lastMessage = prev[prev.length - 1];
+                    if (lastMessage?.id === botMessageId) {
+                        const allButLast = prev.slice(0, -1);
+                        return [...allButLast, { ...lastMessage, text: cleanedResponse }];
+                    }
+                    return prev;
+                });
                 playAudio(cleanedResponse, botMessageId);
             } else {
                 playAudio(fullResponse, botMessageId);
@@ -239,27 +306,104 @@ const App: React.FC = () => {
             throw err;
         } finally {
             setIsBotStreaming(false);
+            if (streamUpdateTimerRef.current) {
+                clearInterval(streamUpdateTimerRef.current);
+                streamUpdateTimerRef.current = null;
+            }
+            streamingMessageIdRef.current = null;
+            streamingTextRef.current = '';
         }
-    }, [category, playAudio, taughtWords, addTaughtWord]);
+    }, [category, playAudio, addTaughtWord, updateStreamingMessage]);
+
+    // Keep a ref to the latest getBotResponse function to avoid dependency cycles.
+    useEffect(() => {
+        getBotResponseRef.current = getBotResponse;
+    }, [getBotResponse]);
+
+    const askNextQuestion = useCallback(() => {
+        if (taughtWords.length === 0) {
+            addBotMessage("Looks like our vocabulary list is empty! Let's learn some more words.");
+            setIsQuizMode(false);
+            return;
+        }
+
+        let nextWord = taughtWords[Math.floor(Math.random() * taughtWords.length)];
+        if (taughtWords.length > 1 && nextWord.english === currentQuizQuestion?.english) {
+            nextWord = taughtWords[Math.floor(Math.random() * taughtWords.length)];
+        }
+        
+        const direction = Math.random() > 0.5 ? 'en-ha' : 'ha-en';
+        setQuizDirection(direction);
+        setCurrentQuizQuestion(nextWord);
+        setQuizScore(prev => ({ ...prev, questions: prev.questions + 1 }));
+
+        const questionText = direction === 'en-ha'
+            ? `What is the Hausa translation for **${nextWord.english}**?`
+            : `What is the English word for **${nextWord.hausa}**?`;
+        
+        setTimeout(() => addBotMessage(questionText), 500);
+    }, [taughtWords, currentQuizQuestion, addBotMessage]);
+    
+    const endQuiz = useCallback((showScore = true) => {
+        setIsQuizMode(false);
+        setCurrentQuizQuestion(null);
+        if (showScore && quizScore.questions > 0) {
+            const scoreMessage = `Quiz finished! You got **${quizScore.correct}** out of **${quizScore.questions}** correct. Wonderful effort, my dear!`;
+            addBotMessage(scoreMessage);
+        } else if (!showScore) {
+             addBotMessage("Quiz ended. Let's get back to our lesson!");
+        }
+        setQuizScore({ correct: 0, questions: 0 });
+    }, [quizScore, addBotMessage]);
+
+    const handleQuizAnswer = useCallback((answer: string) => {
+        if (!currentQuizQuestion) return;
+
+        const correctAnswer = quizDirection === 'en-ha' ? currentQuizQuestion.hausa : currentQuizQuestion.english;
+        const isCorrect = answer.trim().toLowerCase() === correctAnswer.trim().toLowerCase();
+        
+        let feedbackMessage = '';
+        if (isCorrect) {
+            setQuizScore(prev => ({...prev, correct: prev.correct + 1}));
+            feedbackMessage = `Correct! Well done, my dear. 🎉`;
+        } else {
+            feedbackMessage = quizDirection === 'en-ha' 
+                ? `Not quite. The correct translation for **${currentQuizQuestion.english}** is **${correctAnswer}**.`
+                : `Not quite. The correct word for **${currentQuizQuestion.hausa}** is **${correctAnswer}**.`
+        }
+        addBotMessage(feedbackMessage);
+        setTimeout(() => askNextQuestion(), 1500);
+    }, [currentQuizQuestion, quizDirection, askNextQuestion, addBotMessage]);
 
     const handleSendMessage = useCallback((userInput: string) => {
         if (!userInput.trim()) return;
+        
         stopPlayback();
         setError(null);
-
         const newUserMessage: Message = {
             id: Date.now(),
             sender: 'user',
             text: userInput,
-            isSynced: false,
+            isSynced: isQuizMode, 
         };
-        
         setMessages(prev => [...prev, newUserMessage]);
-    }, [stopPlayback]);
+
+        if (isQuizMode) {
+            if (userInput.trim().toLowerCase() === 'stop quiz' || userInput.trim().toLowerCase() === 'end quiz') {
+                endQuiz();
+            } else {
+                setIsLoading(true);
+                setTimeout(() => {
+                    handleQuizAnswer(userInput);
+                    setIsLoading(false);
+                }, 750);
+            }
+        }
+    }, [stopPlayback, isQuizMode, endQuiz, handleQuizAnswer]);
 
     useEffect(() => {
         const processMessageQueue = async () => {
-            if (isSyncing.current || !navigator.onLine || error) {
+            if (isSyncing.current || !navigator.onLine || error || isQuizMode) {
                 return;
             }
 
@@ -274,7 +418,9 @@ const App: React.FC = () => {
             setIsLoading(true);
 
             try {
-                await getBotResponse(messageToSync);
+                if (getBotResponseRef.current) {
+                    await getBotResponseRef.current(messageToSync);
+                }
             } catch (e) {
                 // Error is set in getBotResponse.
             } finally {
@@ -288,10 +434,31 @@ const App: React.FC = () => {
         const handleOnline = () => setError(null);
         window.addEventListener('online', handleOnline);
         return () => window.removeEventListener('online', handleOnline);
-    }, [messages, getBotResponse, error]);
+    }, [messages, error, isQuizMode]);
+    
+    const startQuiz = useCallback(() => {
+        stopPlayback();
+        if (taughtWords.length < 3) {
+            addBotMessage("Oh, sweetheart, we should learn at least 3 words before starting a quiz. Let's learn some more first!");
+            return;
+        }
+        setIsQuizMode(true);
+        setCategory('General');
+        setQuizScore({ correct: 0, questions: 0 });
+        addBotMessage("Excellent! Let's test your knowledge. I'll ask you some questions from our vocabulary list. You can type 'stop quiz' at any time to end it.");
+        askNextQuestion();
+    }, [taughtWords, stopPlayback, askNextQuestion, addBotMessage]);
+
+    const handleToggleQuizMode = useCallback(() => {
+        if (isQuizMode) {
+            endQuiz();
+        } else {
+            startQuiz();
+        }
+    }, [isQuizMode, startQuiz, endQuiz]);
 
     const handleCategoryChange = useCallback((newCategory: VocabularyCategory) => {
-        if (newCategory === category) return;
+        if (newCategory === category || isQuizMode) return;
         setCategory(newCategory);
         stopPlayback();
 
@@ -301,7 +468,7 @@ const App: React.FC = () => {
             text: `Wonderful, my dear! We will now focus on vocabulary about **${newCategory}**. What would you like to learn first?`
         };
         setMessages(prev => [...prev, botMessage]);
-    }, [category, stopPlayback]);
+    }, [category, stopPlayback, isQuizMode]);
 
     const handleToggleSpeech = useCallback((message: Message) => {
         if (speakingMessageId === message.id) {
@@ -313,11 +480,14 @@ const App: React.FC = () => {
     
     const handleClearChat = useCallback(() => {
         stopPlayback();
+        if (isQuizMode) {
+            endQuiz(false);
+        }
         setMessages([INITIAL_MESSAGE]);
         setTaughtWords([]);
         localStorage.removeItem(LOCAL_STORAGE_KEY);
         localStorage.removeItem(TAUGHT_WORDS_KEY);
-    }, [stopPlayback]);
+    }, [stopPlayback, isQuizMode, endQuiz]);
 
     const handleOpenAboutModal = useCallback(() => setIsAboutModalOpen(true), []);
     const handleCloseAboutModal = useCallback(() => setIsAboutModalOpen(false), []);
@@ -329,6 +499,8 @@ const App: React.FC = () => {
                 onSelectCategory={handleCategoryChange} 
                 onOpenAbout={handleOpenAboutModal}
                 onClearChat={handleClearChat}
+                isQuizMode={isQuizMode}
+                onToggleQuizMode={handleToggleQuizMode}
             />
             <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
                 {messages.map((msg, index) => (
@@ -357,8 +529,8 @@ const App: React.FC = () => {
             
             <Toast message={error} onClose={() => setError(null)} />
 
-            <InputBar onSendMessage={handleSendMessage} isLoading={isLoading || isBotStreaming} onStartRecording={stopPlayback} />
-            <AboutModal isOpen={isAboutModalOpen} onClose={handleCloseAboutModal} />
+            <InputBar onSendMessage={handleSendMessage} isLoading={isLoading || isBotStreaming} onStartRecording={stopPlayback} isQuizMode={isQuizMode} />
+            <AboutModal isOpen={isAboutModalOpen} onClose={handleCloseAboutModal} taughtWords={taughtWords} />
         </div>
     );
 };
